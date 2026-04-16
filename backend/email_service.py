@@ -3,8 +3,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-SMTP_USER = os.getenv("SMTP_USER", "aravind2005ak@gmail.com")
-SMTP_PASS = os.getenv("SMTP_PASS", "xpwf gxru wtfb ndgs")
+
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 
