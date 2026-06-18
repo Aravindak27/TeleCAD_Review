@@ -124,6 +124,21 @@ export default function EmployeeDashboard() {
   useEffect(() => { fetchDrawings() }, [fetchDrawings])
 
   useEffect(() => {
+    const handleDrawingUpdate = async (e) => {
+      const { detail } = e
+      fetchDrawings()
+      if (selected?.drawing?.id && String(selected.drawing.id) === String(detail?.drawing_id)) {
+        try {
+          const res = await drawingsAPI.get(selected.drawing.id)
+          setSelected(res.data)
+        } catch {}
+      }
+    }
+    window.addEventListener('drawing-update', handleDrawingUpdate)
+    return () => window.removeEventListener('drawing-update', handleDrawingUpdate)
+  }, [fetchDrawings, selected?.drawing?.id])
+
+  useEffect(() => {
     // Load manager list for assignment on upload
     let cancelled = false
       ; (async () => {

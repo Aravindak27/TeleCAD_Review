@@ -11,14 +11,17 @@ Mounts:
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from database import init_db
+from database import init_db, SessionLocal, User
+from auth import SECRET_KEY, ALGORITHM
+from jose import jwt
+from notification_manager import manager
 from routers import auth_router, drawings_router, issues_router
 
 # ─── Upload directories ───────────────────────────────────────────────────────
@@ -82,3 +85,39 @@ async def root():
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "healthy"}
+
+# ─── WebSockets Notifications ────────────────────────────────────────────────
+@app.websocket("/ws/notifications")
+async def websocket_notifications(websocket: WebSocket):
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=1008)
+        return
+
+    db = SessionLocal()
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if not email:
+            await websocket.close(code=1008)
+            return
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            await websocket.close(code=1008)
+            return
+    except Exception:
+        await websocket.close(code=1008)
+        return
+    finally:
+        db.close()
+
+    await manager.connect(user.id, websocket)
+    try:
+        while True:
+            # Receive data (used as ping/keepalive check)
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(user.id, websocket)
+    except Exception:
+        manager.disconnect(user.id, websocket)
+

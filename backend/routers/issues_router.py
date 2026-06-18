@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from database import get_db, Issue, Drawing
 from auth import get_current_user, require_manager
 from database import User
+from notification_manager import manager as ws_manager
 
 router = APIRouter()
 
@@ -102,6 +103,23 @@ async def create_issue(
 
     db.commit()
     db.refresh(issue)
+
+    # ── WebSocket Notification ──
+    target_user_id = drawing.uploaded_by if current_user.role == "manager" else drawing.assigned_manager_id
+    if target_user_id:
+        await ws_manager.send_personal_message(
+            {
+                "type": "issue_created",
+                "drawing_id": drawing.id,
+                "filename": drawing.filename,
+                "issue_id": issue.id,
+                "is_comment": issue.is_comment,
+                "created_by": issue.created_by,
+                "message": f"New {'comment' if issue.is_comment else 'issue'} added on drawing '{drawing.filename}' by {current_user.name}."
+            },
+            user_id=target_user_id
+        )
+
     return issue
 
 
@@ -153,6 +171,22 @@ async def resolve_issue(
     drawing.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(issue)
+
+    # ── WebSocket Notification ──
+    target_user_id = drawing.uploaded_by if current_user.role == "manager" else drawing.assigned_manager_id
+    if target_user_id:
+        await ws_manager.send_personal_message(
+            {
+                "type": "issue_resolved",
+                "drawing_id": drawing.id,
+                "filename": drawing.filename,
+                "issue_id": issue.id,
+                "resolved": issue.resolved,
+                "message": f"Issue on drawing '{drawing.filename}' was {'resolved' if issue.resolved else 'unresolved'} by {current_user.name}."
+            },
+            user_id=target_user_id
+        )
+
     return issue
 
 

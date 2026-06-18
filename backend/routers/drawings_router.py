@@ -28,6 +28,7 @@ from cad.extractor import extract_drawing_data
 from cad.visualizer import render_drawing
 from cad.media_processor import process_pdf_to_images
 from email_service import send_status_email
+from notification_manager import manager as ws_manager
 
 router = APIRouter()
 
@@ -499,6 +500,19 @@ async def update_status(
     db.commit()
     db.refresh(drawing)
     
+    # ── WebSocket Notification ──
+    await ws_manager.send_personal_message(
+        {
+            "type": "status_updated",
+            "drawing_id": drawing.id,
+            "filename": drawing.filename,
+            "status": payload.status,
+            "manager_comment": payload.manager_comment,
+            "message": f"Drawing '{drawing.filename}' was {payload.status} by manager {manager.name}."
+        },
+        user_id=drawing.uploaded_by
+    )
+    
     # ── Notification Email Routing ──
     if payload.status in ("approved", "sent_back"):
         employee = db.query(User).filter(User.id == drawing.uploaded_by).first()
@@ -543,6 +557,21 @@ async def submit_drawing(
     drawing.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(drawing)
+
+    # ── WebSocket Notification ──
+    if drawing.assigned_manager_id:
+        await ws_manager.send_personal_message(
+            {
+                "type": "drawing_submitted",
+                "drawing_id": drawing.id,
+                "filename": drawing.filename,
+                "employee_id": current_user.id,
+                "employee_name": current_user.name,
+                "message": f"New drawing '{drawing.filename}' submitted by {current_user.name}."
+            },
+            user_id=drawing.assigned_manager_id
+        )
+
     return {"message": "Drawing submitted successfully", "drawing": DrawingOut.model_validate(drawing)}
 
 
