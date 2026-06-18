@@ -13,6 +13,7 @@ import os
 import shutil
 import uuid
 import base64
+import re
 from datetime import datetime
 from typing import List, Optional
 
@@ -60,6 +61,7 @@ class DrawingOut(BaseModel):
     uploaded_by:     int
     assigned_manager_id: Optional[int] = None
     thread_id:       Optional[int] = None
+    thread_name:     Optional[str] = None
     version:         int = 1
     is_latest:       bool = True
     created_at:      datetime
@@ -78,6 +80,7 @@ class DrawingListItem(BaseModel):
     assigned_manager_id: Optional[int] = None
     manager_name:    Optional[str] = None
     thread_id:       Optional[int] = None
+    thread_name:     Optional[str] = None
     version:         int = 1
     is_latest:       bool = True
     created_at:      datetime
@@ -234,17 +237,37 @@ async def upload_drawing(
     resolved_thread_id: Optional[int] = None
     prev_latest: Optional[Drawing] = None
 
+    def generate_thread_name(fname: str) -> str:
+        name_no_ext = fname.rsplit('.', 1)[0] if '.' in fname else fname
+        name_clean = re.sub(r'[^a-zA-Z0-9\s]', ' ', name_no_ext)
+        name_clean = re.sub(r'\s+', ' ', name_clean).strip()
+        if name_clean:
+            return name_clean[0].upper() + name_clean[1:]
+        return "Untitled Folder"
+
     if thread_id is not None:
-        # Re-upload flow: must be employee's own thread, latest must be sent_back.
+        # Re-upload flow: find the latest sent_back drawing in this thread.
         prev_latest = (
             db.query(Drawing)
             .filter(
                 Drawing.thread_id == thread_id,
-                Drawing.is_latest == True,  # noqa: E712
                 Drawing.uploaded_by == current_user.id,
+                Drawing.status == "sent_back",
             )
+            .order_by(Drawing.version.desc())
             .first()
         )
+        if not prev_latest:
+            # Fallback: look for the is_latest drawing in the thread
+            prev_latest = (
+                db.query(Drawing)
+                .filter(
+                    Drawing.thread_id == thread_id,
+                    Drawing.is_latest == True,  # noqa: E712
+                    Drawing.uploaded_by == current_user.id,
+                )
+                .first()
+            )
         if not prev_latest:
             raise HTTPException(status_code=404, detail="Thread not found")
         if prev_latest.status != "sent_back":
@@ -262,17 +285,21 @@ async def upload_drawing(
             )
         resolved_thread_id = prev_latest.thread_id
         version = int(prev_latest.version or 1) + 1
+        resolved_thread_name = prev_latest.thread_name or generate_thread_name(prev_latest.filename)
+    else:
+        resolved_thread_name = generate_thread_name(display_name)
 
     drawing = Drawing(
         filename=display_name,
         original_path=orig_path,
         dxf_path=dxf_path,
         image_path=img_path_str,
-        status="pending",
+        status="draft",
         manager_comment=None,
         uploaded_by=current_user.id,
         assigned_manager_id=assigned_manager_id,
         thread_id=resolved_thread_id,  # set after insert if new thread
+        thread_name=resolved_thread_name,
         version=version,
         is_latest=True,
         updated_at=datetime.utcnow(),
@@ -287,25 +314,11 @@ async def upload_drawing(
         db.commit()
         db.refresh(drawing)
 
-    # If versioned re-upload, retire previous latest and remove its files
+    # If versioned re-upload, retire previous latest — keep files for history viewing.
     if prev_latest is not None:
         prev_latest.is_latest = False
+        prev_latest.status = "older_version"
         prev_latest.updated_at = datetime.utcnow()
-        db.commit()
-        # Delete files for the old version; keep DB row for history.
-        paths_to_delete = [prev_latest.original_path, prev_latest.dxf_path]
-        if prev_latest.image_path:
-            paths_to_delete.extend(prev_latest.image_path.split(','))
-            
-        for p in paths_to_delete:
-            try:
-                if p and os.path.exists(p):
-                    os.remove(p)
-            except Exception:
-                pass
-        # Keep original_path intact (DB constraint), but clear optional artifacts.
-        prev_latest.dxf_path = None
-        prev_latest.image_path = None
         db.commit()
 
     return {
@@ -325,11 +338,13 @@ async def list_drawings(
     current_user: User = Depends(get_current_user),
 ):
     """List current drawings — employees see their own; managers see assigned."""
-    q = db.query(Drawing).filter(Drawing.is_latest == True)  # noqa: E712
+    q = db.query(Drawing)
     if current_user.role == "employee":
         q = q.filter(Drawing.uploaded_by == current_user.id)
     else:
         q = q.filter(Drawing.assigned_manager_id == current_user.id)
+        q = q.filter(Drawing.status != "draft")
+        q = q.filter(Drawing.deleted_by_manager == False)
 
     rows = q.order_by(Drawing.updated_at.desc()).all()
     out: list[DrawingListItem] = []
@@ -346,6 +361,7 @@ async def list_drawings(
                 assigned_manager_id=d.assigned_manager_id,
                 manager_name=manager.name if manager else None,
                 thread_id=d.thread_id,
+                thread_name=d.thread_name,
                 version=d.version or 1,
                 is_latest=bool(d.is_latest),
                 created_at=d.created_at,
@@ -358,6 +374,7 @@ async def list_drawings(
 class HistoryRow(BaseModel):
     id: int
     thread_id: Optional[int] = None
+    thread_name: Optional[str] = None
     version: int
     filename: str
     status: str
@@ -379,6 +396,8 @@ async def history(
         q = q.filter(Drawing.uploaded_by == current_user.id)
     else:
         q = q.filter(Drawing.assigned_manager_id == current_user.id)
+        q = q.filter(Drawing.status != "draft")
+        q = q.filter(Drawing.deleted_by_manager == False)
 
     rows = q.order_by(Drawing.updated_at.desc(), Drawing.created_at.desc()).all()
     out: list[HistoryRow] = []
@@ -389,6 +408,7 @@ async def history(
             HistoryRow(
                 id=d.id,
                 thread_id=d.thread_id,
+                thread_name=d.thread_name,
                 version=d.version or 1,
                 filename=d.filename,
                 status=d.status,
@@ -469,6 +489,8 @@ async def update_status(
         raise HTTPException(status_code=404, detail="Drawing not found")
     if drawing.assigned_manager_id != manager.id:
         raise HTTPException(status_code=403, detail="Access denied")
+    if drawing.status == "older_version":
+        raise HTTPException(status_code=400, detail="Cannot change status of an older version drawing")
 
     drawing.status          = payload.status
     drawing.manager_comment = payload.manager_comment
@@ -502,49 +524,102 @@ async def update_status(
             "drawing": DrawingOut.model_validate(drawing)}
 
 
-@router.delete("/{drawing_id}")
-async def delete_drawing_thread(
+@router.put("/{drawing_id}/submit")
+async def submit_drawing(
     drawing_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Delete a drawing thread (all versions) including issues and files.
+    """Employee submits a drafted drawing to manager."""
+    drawing = db.query(Drawing).filter(Drawing.id == drawing_id).first()
+    if not drawing:
+        raise HTTPException(status_code=404, detail="Drawing not found")
+    if current_user.role != "employee" or drawing.uploaded_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    if drawing.status != "draft":
+        raise HTTPException(status_code=400, detail="Only draft drawings can be submitted")
+    
+    drawing.status = "pending"
+    drawing.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(drawing)
+    return {"message": "Drawing submitted successfully", "drawing": DrawingOut.model_validate(drawing)}
 
-    Rationale: the UI lists only latest versions; deleting the thread avoids
-    "reviving" older versions unexpectedly.
+
+@router.delete("/{drawing_id}")
+async def delete_drawing(
+    drawing_id: int,
+    delete_thread: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Delete a drawing or an entire drawing thread.
     """
     drawing = db.query(Drawing).filter(Drawing.id == drawing_id).first()
     if not drawing:
         raise HTTPException(status_code=404, detail="Drawing not found")
 
+    thread_id = drawing.thread_id or drawing.id
+
     # Access control: employee can delete own; manager can delete assigned.
     if current_user.role == "employee":
         if drawing.uploaded_by != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied")
+            
+        if delete_thread:
+            rows = db.query(Drawing).filter(Drawing.thread_id == thread_id).all()
+            for d in rows:
+                if d.status not in ("draft", "pending", "approved", "older_version"):
+                    raise HTTPException(status_code=403, detail="Cannot delete folder: it contains drawings under review or with revisions needed.")
+        else:
+            if drawing.status not in ("draft", "pending", "approved", "older_version"):
+                raise HTTPException(status_code=403, detail="Employees can only delete drawings in draft, pending, approved or older version state")
+            rows = [drawing]
+
+        deleted_ids: list[int] = []
+        for d in rows:
+            # delete issues
+            db.query(Issue).filter(Issue.drawing_id == d.id).delete()
+            # delete files (best-effort)
+            for p in (d.original_path, d.dxf_path, d.image_path):
+                try:
+                    if p and os.path.exists(p):
+                        os.remove(p)
+                except Exception:
+                    pass
+            deleted_ids.append(d.id)
+            db.delete(d)
+
+        if not delete_thread and drawing.is_latest:
+            remaining = db.query(Drawing).filter(Drawing.thread_id == thread_id).order_by(Drawing.version.desc()).first()
+            if remaining:
+                remaining.is_latest = True
+
+        db.commit()
+        return {"message": "Deleted", "thread_id": thread_id, "deleted_ids": deleted_ids}
     else:
         if drawing.assigned_manager_id != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied")
-
-    thread_id = drawing.thread_id or drawing.id
-    rows = db.query(Drawing).filter(Drawing.thread_id == thread_id).all()
-
-    deleted_ids: list[int] = []
-    for d in rows:
-        # delete issues
-        db.query(Issue).filter(Issue.drawing_id == d.id).delete()
-        # delete files (best-effort)
-        for p in (d.original_path, d.dxf_path, d.image_path):
-            try:
-                if p and os.path.exists(p):
-                    os.remove(p)
-            except Exception:
-                pass
-        deleted_ids.append(d.id)
-        db.delete(d)
-
-    db.commit()
-    return {"message": "Deleted drawing thread", "thread_id": thread_id, "deleted_ids": deleted_ids}
+            
+        # Soft delete for manager
+        if delete_thread:
+            rows = db.query(Drawing).filter(Drawing.thread_id == thread_id).all()
+            for d in rows:
+                if d.status == "reviewed":
+                    raise HTTPException(status_code=403, detail="Cannot delete folder: it contains a drawing currently under review.")
+        else:
+            if drawing.status == "reviewed":
+                raise HTTPException(status_code=403, detail="Cannot delete a drawing currently under review. Wait for Approval or Send Back.")
+            rows = [drawing]
+            
+        deleted_ids: list[int] = []
+        for d in rows:
+            d.deleted_by_manager = True
+            deleted_ids.append(d.id)
+            
+        db.commit()
+        return {"message": "Drawing thread hidden from manager view", "thread_id": thread_id, "deleted_ids": deleted_ids}
 
 
 @router.get("/{drawing_id}/rerender")

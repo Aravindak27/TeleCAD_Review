@@ -56,13 +56,15 @@ export const drawingsAPI = {
   setStatus: (id, body)         => API.put(`/drawings/${id}/status`, body),
   rerender:  (id)               => API.get(`/drawings/${id}/rerender`),
   history:   ()                 => API.get('/drawings/history'),
-  delete:    (id)               => API.delete(`/drawings/${id}`),
+  addComment:(id, data)         => API.post(`/drawings/${id}/comments`, data),
+  submit:    (id)               => API.put(`/drawings/${id}/submit`),
+  delete:    (id, deleteThread = false) => API.delete(`/drawings/${id}${deleteThread ? '?delete_thread=true' : ''}`),
 }
 
 // ─── Issues helpers ───────────────────────────────────────────────────────────
 export const issuesAPI = {
   list:    (drawingId)     => API.get(`/issues/${drawingId}`),
-  create:  (data)          => API.post('/issues/', data),
+  create:  (data)          => API.post('/issues', data),
   update:  (id, data)      => API.put(`/issues/${id}`, data),
   delete:  (id)            => API.delete(`/issues/${id}`),
   resolve: (id)            => API.put(`/issues/${id}/resolve`),

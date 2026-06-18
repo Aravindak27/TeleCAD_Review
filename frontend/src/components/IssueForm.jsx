@@ -28,6 +28,7 @@ export default function IssueForm({ mode = 'add', drawingId, initial = {}, posit
     position_x: initial.position_x ?? position.x ?? 0,
     position_y: initial.position_y ?? position.y ?? 0,
     page_index: initial.page_index ?? position.page_index ?? 0,
+    is_comment: initial.is_comment || false,
   })
   const [saving, setSaving] = useState(false)
   const [error,  setError]  = useState(null)
@@ -69,7 +70,7 @@ export default function IssueForm({ mode = 'add', drawingId, initial = {}, posit
               <AlertTriangle size={18} color="var(--danger)" />
             </div>
             <h2 style={{ fontSize:'1.1rem' }}>
-              {mode === 'add' ? 'Add New Issue' : 'Edit Issue'}
+              {mode === 'add' ? 'Add Issue / Comment' : 'Edit Issue / Comment'}
             </h2>
           </div>
           <button id="close-issue-form-btn" className="btn btn-ghost btn-icon" onClick={onClose}>
@@ -90,35 +91,51 @@ export default function IssueForm({ mode = 'add', drawingId, initial = {}, posit
             </select>
           </div>
 
-          {/* Severity */}
-          <div className="form-group" style={{ marginBottom:16 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', letterSpacing: '0.3px' }}>Severity</div>
-            <div style={{ display:'flex', gap:8 }}>
-              {SEVERITIES.map(s => (
-                <button
-                  key={s}
-                  type="button"
-                  id={`severity-${s.toLowerCase()}-btn`}
-                  onClick={() => set('severity', s)}
-                  style={{
-                    flex:1, padding:'8px',
-                    borderRadius:'var(--radius-md)',
-                    border:`2px solid ${form.severity === s ? 'currentColor' : 'var(--border)'}`,
-                    background: form.severity === s
-                      ? (s === 'Critical' ? 'var(--danger-muted)'
-                        : s === 'Warning' ? 'var(--warning-muted)'
-                        : 'var(--info-muted)')
-                      : 'var(--bg-surface)',
-                    color: s === 'Critical' ? 'var(--danger)'
-                         : s === 'Warning'  ? 'var(--warning)'
-                         : 'var(--info)',
-                    fontWeight:700, fontSize:12,
-                    cursor:'pointer', transition:'all 0.15s',
-                  }}
-                >{s}</button>
-              ))}
-            </div>
+          {/* Is Comment Toggle */}
+          <div className="form-group" style={{ marginBottom:16, display:'flex', alignItems:'center', gap:8 }}>
+            <input
+              type="checkbox"
+              id="is-comment-checkbox"
+              checked={form.is_comment}
+              onChange={e => set('is_comment', e.target.checked)}
+              style={{ width:16, height:16, cursor:'pointer' }}
+            />
+            <label htmlFor="is-comment-checkbox" style={{ margin:0, cursor:'pointer', fontWeight:600 }}>
+              Mark as Comment / Doubt
+            </label>
           </div>
+
+          {/* Severity (hidden if comment) */}
+          {!form.is_comment && (
+            <div className="form-group" style={{ marginBottom:16 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-secondary)', letterSpacing: '0.3px' }}>Severity</div>
+              <div style={{ display:'flex', gap:8 }}>
+                {SEVERITIES.map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    id={`severity-${s.toLowerCase()}-btn`}
+                    onClick={() => set('severity', s)}
+                    style={{
+                      flex:1, padding:'8px',
+                      borderRadius:'var(--radius-md)',
+                      border:`2px solid ${form.severity === s ? 'currentColor' : 'var(--border)'}`,
+                      background: form.severity === s
+                        ? (s === 'Critical' ? 'var(--danger-muted)'
+                          : s === 'Warning' ? 'var(--warning-muted)'
+                          : 'var(--info-muted)')
+                        : 'var(--bg-surface)',
+                      color: s === 'Critical' ? 'var(--danger)'
+                           : s === 'Warning'  ? 'var(--warning)'
+                           : 'var(--info)',
+                      fontWeight:700, fontSize:12,
+                      cursor:'pointer', transition:'all 0.15s',
+                    }}
+                  >{s}</button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Message */}
           <div className="form-group" style={{ marginBottom:16 }}>

@@ -71,8 +71,10 @@ class Drawing(Base):
     uploaded_by     = Column(Integer, ForeignKey("users.id"), nullable=False)
     assigned_manager_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     thread_id       = Column(Integer, nullable=True)       # Root drawing id for version thread
+    thread_name     = Column(String(255), nullable=True)   # Folder name
     version         = Column(Integer, default=1)
     is_latest       = Column(Boolean, default=True)
+    deleted_by_manager = Column(Boolean, default=False)
     created_at      = Column(DateTime, default=datetime.utcnow)
     updated_at      = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -103,6 +105,7 @@ class Issue(Base):
     created_by  = Column(String(20), default="Manager")    # always "Manager" for new rows
     resolved    = Column(Boolean, default=False)
     page_index  = Column(Integer, default=0)               # Page index for multi-page docs
+    is_comment  = Column(Boolean, default=False)
     created_at  = Column(DateTime, default=datetime.utcnow)
 
     drawing = relationship("Drawing", back_populates="issues")
@@ -146,12 +149,17 @@ def init_db():
             conn.execute(text("ALTER TABLE drawings ADD COLUMN assigned_manager_id INTEGER"))
         if "thread_id" not in cols:
             conn.execute(text("ALTER TABLE drawings ADD COLUMN thread_id INTEGER"))
+        if "thread_name" not in cols:
+            conn.execute(text("ALTER TABLE drawings ADD COLUMN thread_name VARCHAR(255)"))
         if "version" not in cols:
             conn.execute(text("ALTER TABLE drawings ADD COLUMN version INTEGER DEFAULT 1"))
             conn.execute(text("UPDATE drawings SET version = 1 WHERE version IS NULL"))
         if "is_latest" not in cols:
             conn.execute(text("ALTER TABLE drawings ADD COLUMN is_latest BOOLEAN DEFAULT 1"))
             conn.execute(text("UPDATE drawings SET is_latest = 1 WHERE is_latest IS NULL"))
+        if "deleted_by_manager" not in cols:
+            conn.execute(text("ALTER TABLE drawings ADD COLUMN deleted_by_manager BOOLEAN DEFAULT 0"))
+            conn.execute(text("UPDATE drawings SET deleted_by_manager = 0 WHERE deleted_by_manager IS NULL"))
 
         # Backfill thread_id for existing rows: each drawing is its own thread root
         conn.execute(text("UPDATE drawings SET thread_id = id WHERE thread_id IS NULL"))
@@ -160,3 +168,5 @@ def init_db():
         issue_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(issues)")).fetchall()}
         if "page_index" not in issue_cols:
             conn.execute(text("ALTER TABLE issues ADD COLUMN page_index INTEGER DEFAULT 0"))
+        if "is_comment" not in issue_cols:
+            conn.execute(text("ALTER TABLE issues ADD COLUMN is_comment BOOLEAN DEFAULT 0"))

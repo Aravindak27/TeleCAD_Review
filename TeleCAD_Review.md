@@ -110,6 +110,7 @@ To prevent network lag (SMTP operations typically take 1 to 4 seconds to resolve
 ## 5. Database Architecture (Persistence Tier)
 
 The relational engine backing the application guarantees that issues map perfectly to drawn coordinates and assigned personnel configurations are strictly enforced.
+Ok I want the user also to add comments to ask doubts to managers
 
 ### 5.1 Relational Models (`database.py`)
 Driven strictly by SQLAlchemy Object Relational Modeling:

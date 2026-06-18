@@ -8,17 +8,17 @@
  */
 
 import React, { useState } from 'react'
-import { Edit2, Trash2, CheckCircle, Circle, AlertTriangle, AlertCircle, Info, User } from 'lucide-react'
+import { Edit2, Trash2, CheckCircle, Circle, AlertTriangle, AlertCircle, Info, User, MessageCircle } from 'lucide-react'
 import { issuesAPI } from '../api/client'
 
 const SEV_ORDER    = { Critical: 0, Warning: 1, Info: 2 }
 const SEV_CLASS    = { Critical: 'badge-critical', Warning: 'badge-warning', Info: 'badge-info' }
 const SEV_ICON     = { Critical: AlertCircle, Warning: AlertTriangle, Info: Info }
 
-function IssueItem({ issue, selected, managerMode, onSelect, onEdit, onDelete, onResolve }) {
+function IssueItem({ issue, selected, managerMode, canEdit, onSelect, onEdit, onDelete, onResolve }) {
   const [deleting,  setDeleting]  = useState(false)
   const [resolving, setResolving] = useState(false)
-  const Icon = SEV_ICON[issue.severity] || Info
+  const Icon = issue.is_comment ? MessageCircle : (SEV_ICON[issue.severity] || Info)
 
   const handleDelete = async (e) => {
     e.stopPropagation()
@@ -46,14 +46,15 @@ function IssueItem({ issue, selected, managerMode, onSelect, onEdit, onDelete, o
       <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:8, marginBottom:8 }}>
         <div style={{ display:'flex', alignItems:'center', gap:8, flex:1, minWidth:0 }}>
           <Icon size={14} color={
-            issue.severity === 'Critical' ? 'var(--danger)'
+            issue.is_comment ? '#a855f7'
+            : issue.severity === 'Critical' ? 'var(--danger)'
             : issue.severity === 'Warning' ? 'var(--warning)'
             : 'var(--info)'
           } />
-          <span style={{ fontWeight:700, fontSize:13, color:'var(--text-primary)' }}>
-            {issue.type}
+          <span style={{ fontWeight:700, fontSize:13, color: issue.is_comment ? '#a855f7' : 'var(--text-primary)' }}>
+            {issue.is_comment ? 'Comment / Doubt' : issue.type}
           </span>
-          <span className={`badge ${SEV_CLASS[issue.severity]}`}>{issue.severity}</span>
+          {!issue.is_comment && <span className={`badge ${SEV_CLASS[issue.severity]}`}>{issue.severity}</span>}
           {issue.resolved && <span className="badge badge-success">Resolved</span>}
         </div>
 
@@ -79,16 +80,18 @@ function IssueItem({ issue, selected, managerMode, onSelect, onEdit, onDelete, o
         </div>
       )}
 
-      {/* Manager actions */}
-      {managerMode && (
+      {/* Actions */}
+      {(managerMode || canEdit) && (
         <div style={{ display:'flex', gap:6, marginTop:8 }}>
-          <button
-            id={`edit-issue-${issue.id}-btn`}
-            className="btn btn-secondary btn-sm"
-            onClick={(e) => { e.stopPropagation(); onEdit(issue) }}
-          >
-            <Edit2 size={11} /> Edit
-          </button>
+          {(managerMode || (canEdit && issue.created_by === 'Employee')) && (
+            <button
+              id={`edit-issue-${issue.id}-btn`}
+              className="btn btn-secondary btn-sm"
+              onClick={(e) => { e.stopPropagation(); onEdit(issue) }}
+            >
+              <Edit2 size={11} /> Edit
+            </button>
+          )}
 
           <button
             id={`resolve-issue-${issue.id}-btn`}
@@ -101,15 +104,17 @@ function IssueItem({ issue, selected, managerMode, onSelect, onEdit, onDelete, o
               : <><CheckCircle size={11} /> Resolve</>}
           </button>
 
-          <button
-            id={`delete-issue-${issue.id}-btn`}
-            className="btn btn-danger btn-sm"
-            onClick={handleDelete}
-            disabled={deleting}
-          >
-            {deleting ? <div className="spinner" style={{width:10,height:10}}/> : <Trash2 size={11} />}
-            Delete
-          </button>
+          {(managerMode || (canEdit && issue.created_by === 'Employee')) && (
+            <button
+              id={`delete-issue-${issue.id}-btn`}
+              className="btn btn-danger btn-sm"
+              onClick={handleDelete}
+              disabled={deleting}
+            >
+              {deleting ? <div className="spinner" style={{width:10,height:10}}/> : <Trash2 size={11} />}
+              Delete
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -120,20 +125,23 @@ export default function IssuePanel({
   issues       = [],
   selectedId   = null,
   managerMode  = false,
+  canEdit      = false,
   onSelect,
   onEdit,
   onIssueUpdated,   // (updatedIssue) from resolve
   onIssueDeleted,   // (id)
 }) {
   const sorted = [...issues].sort((a, b) => {
+    if (a.is_comment !== b.is_comment) return a.is_comment ? 1 : -1 // Comments at bottom
     const sevDiff = (SEV_ORDER[a.severity] ?? 2) - (SEV_ORDER[b.severity] ?? 2)
     return sevDiff || (a.resolved ? 1 : -1)
   })
 
   const counts = {
-    Critical: issues.filter(i => i.severity === 'Critical' && !i.resolved).length,
-    Warning:  issues.filter(i => i.severity === 'Warning'  && !i.resolved).length,
-    Info:     issues.filter(i => i.severity === 'Info'     && !i.resolved).length,
+    Critical: issues.filter(i => !i.is_comment && i.severity === 'Critical' && !i.resolved).length,
+    Warning:  issues.filter(i => !i.is_comment && i.severity === 'Warning'  && !i.resolved).length,
+    Info:     issues.filter(i => !i.is_comment && i.severity === 'Info'     && !i.resolved).length,
+    Comments: issues.filter(i => i.is_comment && !i.resolved).length,
     resolved: issues.filter(i => i.resolved).length,
   }
 
@@ -147,12 +155,16 @@ export default function IssuePanel({
           ['Critical', counts.Critical, 'badge-critical'],
           ['Warning',  counts.Warning,  'badge-warning'],
           ['Info',     counts.Info,     'badge-info'],
+          ['Comments', counts.Comments, ''],
           ['Resolved', counts.resolved, 'badge-success'],
-        ].map(([label, count, cls]) => (
-          <span key={label} className={`badge ${cls}`}>
-            {count} {label}
-          </span>
-        ))}
+        ].map(([label, count, cls]) => {
+          if (count === 0 && label === 'Comments') return null;
+          return (
+            <span key={label} className={`badge ${cls}`} style={label === 'Comments' ? { background: '#a855f720', color: '#a855f7', border: '1px solid #a855f750' } : {}}>
+              {count} {label}
+            </span>
+          )
+        })}
         <span className="badge" style={{ marginLeft:'auto', background:'var(--bg-hover)', color:'var(--text-secondary)', border:'1px solid var(--border)' }}>
           {issues.length} Total
         </span>
@@ -172,6 +184,7 @@ export default function IssuePanel({
             issue={issue}
             selected={issue.id === selectedId}
             managerMode={managerMode}
+            canEdit={canEdit}
             onSelect={onSelect}
             onEdit={onEdit}
             onDelete={onIssueDeleted}

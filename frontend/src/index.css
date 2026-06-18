@@ -315,6 +315,12 @@ textarea { resize: vertical; min-height: 80px; }
 }
 .pulse-glow { animation: pulse-glow 2s infinite; }
 
+@keyframes pulse-glow-square {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
+  50%       { box-shadow: 0 0 20px 4px rgba(63, 185, 80, 0.4); }
+}
+.pulse-glow-square { animation: pulse-glow-square 2s infinite; }
+
 /* ─── Fade-in ────────────────────────────────────────────────── */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }

@@ -34,6 +34,7 @@ export default function ManagerReviewModal({
     position_x: position.x ?? 0,
     position_y: position.y ?? 0,
     page_index: position.page_index ?? 0,
+    is_comment: false,
   })
   const [sendBackComment, setSendBackComment] = useState('')
   const [savingIssue, setSavingIssue] = useState(false)
@@ -76,6 +77,7 @@ export default function ManagerReviewModal({
         position_x: form.position_x,
         position_y: form.position_y,
         page_index: form.page_index,
+        is_comment: form.is_comment,
       })
       onIssueSaved?.(res.data)
       setForm((f) => ({ ...f, message: '' }))
@@ -176,8 +178,23 @@ export default function ManagerReviewModal({
           </h3>
 
           <form onSubmit={handleSaveIssue}>
-            <div className="form-group" style={{ marginBottom: 12 }}>
-              <label htmlFor="mgr-issue-type">Type</label>
+            <div className="form-group" style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="checkbox"
+                id="mgr-is-comment"
+                checked={form.is_comment}
+                onChange={(e) => set('is_comment', e.target.checked)}
+                style={{ width: 16, height: 16, cursor: 'pointer' }}
+              />
+              <label htmlFor="mgr-is-comment" style={{ margin: 0, cursor: 'pointer', fontWeight: 600 }}>
+                Mark as Comment / Doubt
+              </label>
+            </div>
+
+            {!form.is_comment && (
+              <>
+                <div className="form-group" style={{ marginBottom: 12 }}>
+                  <label htmlFor="mgr-issue-type">Type</label>
               <select
                 id="mgr-issue-type"
                 value={form.type}
@@ -226,6 +243,8 @@ export default function ManagerReviewModal({
                 ))}
               </div>
             </div>
+          </>
+            )}
 
             <div className="form-group" style={{ marginBottom: 12 }}>
               <label htmlFor="mgr-issue-msg">Description</label>
@@ -308,7 +327,7 @@ export default function ManagerReviewModal({
               type="button"
               className="btn btn-success"
               style={{ flex: 1, minWidth: 140 }}
-              disabled={isApproved || submittingStatus}
+              disabled={isApproved || drawing.status === 'older_version' || submittingStatus}
               onClick={() => submitStatus('approved')}
             >
               {submittingStatus ? (
@@ -323,7 +342,7 @@ export default function ManagerReviewModal({
               type="button"
               className="btn btn-danger"
               style={{ flex: 1, minWidth: 140 }}
-              disabled={submittingStatus}
+              disabled={drawing.status === 'older_version' || submittingStatus}
               onClick={() => submitStatus('sent_back')}
             >
               {submittingStatus ? (
@@ -338,6 +357,11 @@ export default function ManagerReviewModal({
           {isApproved && (
             <p style={{ fontSize: 12, color: 'var(--success)', marginTop: 10, marginBottom: 0 }}>
               This drawing is already approved.
+            </p>
+          )}
+          {drawing.status === 'older_version' && (
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 10, marginBottom: 0 }}>
+              This is an older version. Approve/Send Back is only available on the latest version.
             </p>
           )}
         </section>

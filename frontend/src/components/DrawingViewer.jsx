@@ -25,8 +25,9 @@ export default function DrawingViewer({
   bounds       = { min_x: 0, min_y: 0, max_x: 1000, max_y: 800 },
   selectedId   = null,
   onSelectIssue,
-  onClickPosition,   // (cadX, cadY, pageIndex) → called when manager clicks blank area
+  onClickPosition,   // (cadX, cadY, pageIndex) → called when manager/employee clicks blank area
   managerMode  = false,
+  canAnnotate  = false,
 }) {
   const imgRef   = useRef(null)
   const wrapRef  = useRef(null)
@@ -59,10 +60,10 @@ export default function DrawingViewer({
 
   // In employee view, show a short drag hint until the user pans once.
   useEffect(() => {
-    if (managerMode || hasPanned) return
+    if (managerMode || canAnnotate || hasPanned) return
     const t = setTimeout(() => setHasPanned(true), 7000)
     return () => clearTimeout(t)
-  }, [managerMode, hasPanned])
+  }, [managerMode, canAnnotate, hasPanned])
 
   // ── Coordinate conversion ──────────────────────────────────────────────────
   const pixelToCad = useCallback((px, py) => {
@@ -83,13 +84,13 @@ export default function DrawingViewer({
 
   // ── Click handler (image only — avoids stray clicks on scroll chrome) ─────
   const handleImageClick = (e) => {
-    if (!managerMode || !placementMode) return
+    if (!(managerMode || canAnnotate) || !placementMode) return
     e.stopPropagation()
     const [cx, cy] = pixelToCad(e.clientX, e.clientY)
     if (onClickPosition) onClickPosition(cx, cy, currentPage)
   }
 
-  const canLeftPan = !managerMode || !placementMode
+  const canLeftPan = !(managerMode || canAnnotate) || !placementMode
   const onMouseDownPan = (e) => {
     const isMiddleClick = e.button === 1
     if (e.button !== 0 && !isMiddleClick) return
@@ -161,7 +162,7 @@ export default function DrawingViewer({
           title="Reset Zoom"
         ><RotateCcw size={14} /></button>
 
-        {managerMode && (
+        { (managerMode || canAnnotate) && (
           <button
             id="add-issue-crosshair-btn"
             type="button"
@@ -198,8 +199,8 @@ export default function DrawingViewer({
         )}
       </div>
 
-      {/* ── Manager mode hint ────────────────────────────────────────────────── */}
-      {managerMode && (
+      {/* ── Placement mode hint ────────────────────────────────────────────────── */}
+      {(managerMode || canAnnotate) && (
         <div style={{
           position:'absolute', top:12, right:12, zIndex:20,
           fontSize:11, padding:'4px 10px', borderRadius:20,
@@ -243,7 +244,7 @@ export default function DrawingViewer({
               display:'block',
               maxWidth:'100%',
               userSelect:'none',
-              cursor: managerMode && placementMode ? 'crosshair' : 'inherit',
+              cursor: (managerMode || canAnnotate) && placementMode ? 'crosshair' : 'inherit',
             }}
             draggable={false}
           />
@@ -261,7 +262,7 @@ export default function DrawingViewer({
             {issues.map((issue, idx) => {
               if ((issue.page_index || 0) !== currentPage) return null
               const [px, py] = cadToPercent(issue.position_x || 0, issue.position_y || 0)
-              const color    = SEV_COLOR[issue.severity] || '#ff2020'
+              const color    = issue.is_comment ? '#a855f7' : (SEV_COLOR[issue.severity] || '#ff2020')
               const isSelected = issue.id === selectedId
 
               return (
@@ -272,18 +273,37 @@ export default function DrawingViewer({
                 >
                   {/* Pulse ring for selected */}
                   {isSelected && (
-                    <circle cx={px} cy={py} r="3.5" fill="none"
-                      stroke={color} strokeWidth="0.5" opacity="0.5"
-                      style={{ animation:'pulse-glow 1.5s infinite' }} />
+                    issue.created_by === 'Employee' ? (
+                      <rect x={px - 3.5} y={py - 3.5} width="7" height="7" fill="none"
+                        stroke={color} strokeWidth="0.5" opacity="0.5"
+                        style={{ animation:'pulse-glow-square 1.5s infinite' }} />
+                    ) : (
+                      <circle cx={px} cy={py} r="3.5" fill="none"
+                        stroke={color} strokeWidth="0.5" opacity="0.5"
+                        style={{ animation:'pulse-glow 1.5s infinite' }} />
+                    )
                   )}
-                  {/* Marker circle */}
-                  <circle
-                    cx={px} cy={py} r={isSelected ? "2.2" : "1.8"}
-                    fill={color}
-                    stroke="white"
-                    strokeWidth="0.3"
-                    opacity={issue.resolved ? 0.35 : 0.92}
-                  />
+                  {/* Marker shape */}
+                  {issue.created_by === 'Employee' ? (
+                    <rect
+                      x={px - (isSelected ? 2.2 : 1.8)}
+                      y={py - (isSelected ? 2.2 : 1.8)}
+                      width={(isSelected ? 2.2 : 1.8) * 2}
+                      height={(isSelected ? 2.2 : 1.8) * 2}
+                      fill={color}
+                      stroke="white"
+                      strokeWidth="0.3"
+                      opacity={issue.resolved ? 0.35 : 0.92}
+                    />
+                  ) : (
+                    <circle
+                      cx={px} cy={py} r={isSelected ? "2.2" : "1.8"}
+                      fill={color}
+                      stroke="white"
+                      strokeWidth="0.3"
+                      opacity={issue.resolved ? 0.35 : 0.92}
+                    />
+                  )}
                   {/* Index number */}
                   <text
                     x={px} y={py + 0.55}
@@ -303,7 +323,7 @@ export default function DrawingViewer({
       </div>
 
       {/* ── Employee drag hint overlay ─────────────────────────────────────── */}
-      {!managerMode && !hasPanned && (
+      {!(managerMode || canAnnotate) && !hasPanned && (
         <div style={{
           position:'absolute',
           left:'50%',

@@ -13,19 +13,22 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Upload, RefreshCw, FileText, CheckCircle, Clock, AlertTriangle, XCircle, ChevronRight, Star, Trash2, ListChecks } from 'lucide-react'
+import { Upload, RefreshCw, FileText, CheckCircle, Clock, AlertTriangle, XCircle, ChevronRight, Star, Trash2, ListChecks, Search, ArrowUp, ArrowDown, Folder } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import UploadComponent from '../components/UploadComponent'
 import DrawingViewer from '../components/DrawingViewer'
 import IssuePanel from '../components/IssuePanel'
+import IssueForm from '../components/IssueForm'
 import { drawingsAPI, authAPI } from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 
 const STATUS_META = {
-  pending: { label: 'Pending Review', color: 'var(--warning)', Icon: Clock },
-  reviewed: { label: 'Under Review', color: 'var(--info)', Icon: RefreshCw },
-  approved: { label: 'Approved ✓', color: 'var(--success)', Icon: CheckCircle },
-  sent_back: { label: 'Revisions Needed', color: 'var(--danger)', Icon: XCircle },
+  draft:         { label: 'Draft',           color: 'var(--text-secondary)', Icon: FileText },
+  pending:       { label: 'Pending Review',   color: 'var(--warning)',        Icon: Clock },
+  reviewed:      { label: 'Under Review',     color: 'var(--info)',           Icon: RefreshCw },
+  approved:      { label: 'Approved ✓',       color: 'var(--success)',        Icon: CheckCircle },
+  sent_back:     { label: 'Revisions Needed', color: 'var(--danger)',         Icon: XCircle },
+  older_version: { label: 'Older Version',    color: 'var(--text-muted)',     Icon: FileText },
 }
 
 export default function EmployeeDashboard() {
@@ -40,10 +43,15 @@ export default function EmployeeDashboard() {
 
   const [threadHistory, setThreadHistory] = useState([])
   const [selectedDrawingIds, setSelectedDrawingIds] = useState([])
+  const [selectionType, setSelectionType] = useState(null) // 'file' | 'folder' | null
   const [selectionMode, setSelectionMode] = useState(false)
   const favKey = useMemo(() => `favDrawingThreads:${user?.id || 'anon'}`, [user?.id])
   const [favThreadIds, setFavThreadIds] = useState(() => {
     try { return JSON.parse(localStorage.getItem(`favDrawingThreads:${user?.id || 'anon'}`) || '[]') } catch { return [] }
+  })
+  const favDrawingKey = useMemo(() => `favDrawingIds:${user?.id || 'anon'}`, [user?.id])
+  const [favDrawingIds, setFavDrawingIds] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(`favDrawingIds:${user?.id || 'anon'}`) || '[]') } catch { return [] }
   })
 
   const [managers, setManagers] = useState([])
@@ -52,6 +60,37 @@ export default function EmployeeDashboard() {
 
   const [sidebarWidth, setSidebarWidth] = useState(320)
   const isResizing = useRef(false)
+
+  const [showIssueForm, setShowIssueForm] = useState(false)
+  const [issuePosition, setIssuePosition] = useState(null)
+  const [selectedIssueId, setSelectedIssueId] = useState(null)
+  const [editingIssue, setEditingIssue] = useState(null)
+
+  const [managerSearchQuery, setManagerSearchQuery] = useState('')
+  const [drawingSearchQuery, setDrawingSearchQuery] = useState('')
+  const [drawingSortOrder, setDrawingSortOrder] = useState('desc')
+  const [expandedFolders, setExpandedFolders] = useState({}) // 'desc' | 'asc'
+
+  const handleIssueSaved = (issue) => {
+    setSelected(prev => {
+      const exists = prev.issues.find(i => i.id === issue.id)
+      return {
+        ...prev,
+        issues: exists ? prev.issues.map(i => i.id === issue.id ? issue : i) : [...prev.issues, issue]
+      }
+    })
+    setShowIssueForm(false)
+    setEditingIssue(null)
+  }
+
+  const handleIssueDeleted = (id) => {
+    setSelected(prev => ({ ...prev, issues: prev.issues.filter(i => i.id !== id) }))
+    if (selectedIssueId === id) setSelectedIssueId(null)
+  }
+
+  const handleIssueUpdated = (issue) => {
+    handleIssueSaved(issue)
+  }
 
   useEffect(() => {
     const handleMouseMove = (e) => {
@@ -147,9 +186,11 @@ export default function EmployeeDashboard() {
       created_at: data.drawing.created_at,
       updated_at: data.drawing.updated_at,
     }
-    setDrawings(prev => [listItem, ...prev])
-    setSelected(data)
-    setViewMode('detail')
+    setDrawings(prev => {
+      const filtered = prev.filter(d => String(d.thread_id || d.id) !== String(listItem.thread_id || listItem.id))
+      return [listItem, ...filtered]
+    })
+    openDrawing(listItem)
     setReupload(false)
   }
 
@@ -191,28 +232,122 @@ export default function EmployeeDashboard() {
 
   const isFavThread = useCallback((threadId) => favThreadIds.includes(Number(threadId)), [favThreadIds])
 
-  const activeManagerDrawingsSorted = useMemo(() => {
-    if (!activeManagerDrawings.length) return activeManagerDrawings
-    return [...activeManagerDrawings].sort((a, b) => {
-      const af = isFavThread(a.thread_id || a.id) ? 1 : 0
-      const bf = isFavThread(b.thread_id || b.id) ? 1 : 0
-      if (af !== bf) return bf - af
-      return new Date(b.updated_at || b.created_at) - new Date(a.updated_at || a.created_at)
-    })
-  }, [activeManagerDrawings, isFavThread])
+  const filteredManagerGroups = useMemo(() => {
+    return managerGroups.filter(m => 
+      (m.manager_name || 'Manager').toLowerCase().includes(managerSearchQuery.toLowerCase())
+    )
+  }, [managerGroups, managerSearchQuery])
 
-  const toggleSelect = (id) => {
-    setSelectedDrawingIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  const formatFolderName = (name) => {
+    if (!name) return "Untitled Folder"
+    let clean = name.includes('.') ? name.substring(0, name.lastIndexOf('.')) : name
+    clean = clean.replace(/[^a-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+    return clean ? clean.charAt(0).toUpperCase() + clean.slice(1) : "Untitled Folder"
   }
 
-  const clearSelection = () => setSelectedDrawingIds([])
+  const groupedThreads = useMemo(() => {
+    const map = new Map()
+    for (const d of activeManagerDrawings) {
+      if (drawingSearchQuery && !(d.filename || '').toLowerCase().includes(drawingSearchQuery.toLowerCase())) {
+        continue
+      }
+      const tid = d.thread_id || d.id
+      if (!map.has(tid)) {
+        map.set(tid, {
+          thread_id: tid,
+          thread_name: d.thread_name || formatFolderName(d.filename),
+          versions: [],
+          last_updated: new Date(d.updated_at || d.created_at).getTime()
+        })
+      }
+      const thread = map.get(tid)
+      thread.versions.push(d)
+      const dTime = new Date(d.updated_at || d.created_at).getTime()
+      if (dTime > thread.last_updated) {
+        thread.last_updated = dTime
+      }
+    }
+    
+    for (const thread of map.values()) {
+      thread.versions.sort((a, b) => (b.version || 1) - (a.version || 1))
+    }
+
+    return [...map.values()].sort((a, b) => {
+      const af = isFavThread(a.thread_id) ? 1 : 0
+      const bf = isFavThread(b.thread_id) ? 1 : 0
+      if (af !== bf) return bf - af
+      return drawingSortOrder === 'desc' 
+        ? b.last_updated - a.last_updated 
+        : a.last_updated - b.last_updated
+    })
+  }, [activeManagerDrawings, drawingSearchQuery, drawingSortOrder, isFavThread])
+
+  const isFavDrawing = useCallback((id) => favDrawingIds.includes(Number(id)), [favDrawingIds])
+
+  const toggleFavDrawing = (e, id) => {
+    e.stopPropagation()
+    setFavDrawingIds(prev => {
+      const next = prev.includes(Number(id)) ? prev.filter(x => x !== Number(id)) : [...prev, Number(id)]
+      localStorage.setItem(favDrawingKey, JSON.stringify(next))
+      return next
+    })
+  }
+
+  const sortVersions = useCallback((versions) => {
+    if (!versions || versions.length === 0) return versions
+    const [latest, ...rest] = versions
+    const favRest = rest.filter(v => isFavDrawing(v.id))
+    const normalRest = rest.filter(v => !isFavDrawing(v.id))
+    return [latest, ...favRest, ...normalRest]
+  }, [isFavDrawing])
+
+  const toggleFolder = (e, threadId) => {
+    e.stopPropagation()
+    setExpandedFolders(prev => ({ ...prev, [threadId]: !prev[threadId] }))
+  }
+
+  const toggleFolderSelect = (threadId) => {
+    if (selectionType === 'file') {
+      alert("You can only select folders right now. Clear selection to select files.")
+      return
+    }
+    setSelectionType('folder')
+    setSelectedDrawingIds(prev => {
+      const next = prev.includes(threadId) ? prev.filter(x => x !== threadId) : [...prev, threadId]
+      if (next.length === 0) setSelectionType(null)
+      return next
+    })
+  }
+
+  const toggleSelect = (id) => {
+    if (selectionType === 'folder') {
+      alert("You can only select files right now. Clear selection to select folders.")
+      return
+    }
+    setSelectionType('file')
+    setSelectedDrawingIds(prev => {
+      const next = prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+      if (next.length === 0) setSelectionType(null)
+      return next
+    })
+  }
+
+  const clearSelection = () => {
+    setSelectedDrawingIds([])
+    setSelectionType(null)
+  }
 
   const favouriteSelected = () => {
-    if (!selectionMode) return
-    const threadIds = selectedDrawingIds
-      .map(id => drawings.find(d => d.id === id))
-      .filter(Boolean)
-      .map(d => Number(d.thread_id || d.id))
+    if (!selectionMode || selectedDrawingIds.length === 0) return
+    const threadIds = []
+    if (selectionType === 'folder') {
+      threadIds.push(...selectedDrawingIds)
+    } else {
+      selectedDrawingIds.forEach(id => {
+        const d = drawings.find(x => x.id === id)
+        if (d) threadIds.push(d.thread_id || d.id)
+      })
+    }
     const next = Array.from(new Set([...favThreadIds, ...threadIds]))
     setFavThreadIds(next)
     localStorage.setItem(favKey, JSON.stringify(next))
@@ -220,18 +355,50 @@ export default function EmployeeDashboard() {
   }
 
   const deleteSelected = async () => {
-    if (!selectionMode) return
-    const ids = [...selectedDrawingIds]
-    if (ids.length === 0) return
-    try {
-      await Promise.all(ids.map(id => drawingsAPI.delete(id)))
-      setDrawings(prev => prev.filter(d => !ids.includes(d.id) && !ids.includes(d.thread_id)))
-      if (selected?.drawing?.id && ids.includes(selected.drawing.id)) {
-        setSelected(null)
-        setViewMode('list')
+    if (!selectionMode || selectedDrawingIds.length === 0) return
+
+    // Employee pre-flight check
+    if (selectionType === 'folder') {
+      const blockedFolder = selectedDrawingIds.some(tid => {
+        const t = groupedThreads.find(g => g.thread_id === tid)
+        return t && t.versions.some(v => ['reviewed', 'sent_back'].includes(v.status))
+      })
+      if (blockedFolder) {
+        alert("Cannot delete: a selected folder contains drawings under review or with revisions needed.")
+        return
       }
-    } catch { }
-    finally { clearSelection() }
+    } else {
+      const blockedFile = selectedDrawingIds.some(id => {
+        const d = drawings.find(x => x.id === id)
+        return d && !['draft', 'pending', 'approved', 'older_version'].includes(d.status)
+      })
+      if (blockedFile) {
+        alert("Cannot delete: one or more selected drawings cannot be deleted in their current state.")
+        return
+      }
+    }
+
+    if (!window.confirm(`Are you sure you want to delete the selected ${selectionType}s?`)) return
+
+    try {
+      if (selectionType === 'folder') {
+        for (const tid of selectedDrawingIds) {
+          const t = groupedThreads.find(g => g.thread_id === tid)
+          if (t && t.versions.length > 0) {
+            await drawingsAPI.delete(t.versions[0].id, true)
+          }
+        }
+      } else {
+        for (const id of selectedDrawingIds) {
+          await drawingsAPI.delete(id, false)
+        }
+      }
+      clearSelection()
+      setSelected(null)
+      fetchDrawings()
+    } catch (e) {
+      alert("Error deleting some items. " + (e.response?.data?.detail || e.message))
+    }
   }
 
   const toggleSelectionMode = () => {
@@ -321,7 +488,20 @@ export default function EmployeeDashboard() {
                 <p style={{ fontSize: 12 }}>Upload your first DXF</p>
               </div>
             ) : activeManagerId == null ? (
-              managerGroups.map((m) => {
+              <>
+                <div style={{ marginBottom: 12, position: 'relative' }}>
+                  <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                  <input 
+                    type="text" 
+                    placeholder="Search managers..." 
+                    value={managerSearchQuery}
+                    onChange={(e) => setManagerSearchQuery(e.target.value)}
+                    style={{ width: '100%', paddingLeft: 30, paddingRight: 10, paddingTop: 6, paddingBottom: 6, borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg-card)', fontSize: 13 }}
+                  />
+                </div>
+                {filteredManagerGroups.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>No managers found.</div>
+                ) : filteredManagerGroups.map((m) => {
                 const key = String(m.assigned_manager_id ?? 'none')
                 const isActive = String(activeManagerId ?? '') === key
                 return (
@@ -354,7 +534,8 @@ export default function EmployeeDashboard() {
                     <ChevronRight size={14} color="var(--text-muted)" />
                   </div>
                 )
-              })
+              })}
+              </>
             ) : (
               <>
                 <button
@@ -410,55 +591,130 @@ export default function EmployeeDashboard() {
                   </div>
                 </div>
 
-                {activeManagerDrawingsSorted.map(d => {
-                  const meta = STATUS_META[d.status] || STATUS_META.pending
-                  const isActive = selected?.drawing?.id === d.id
-                  const checked = selectedDrawingIds.includes(d.id)
-                  const fav = isFavThread(d.thread_id || d.id)
+                <div style={{ marginBottom: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <div style={{ position: 'relative', flex: 1 }}>
+                    <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                    <input 
+                      type="text" 
+                      placeholder="Search drawings..." 
+                      value={drawingSearchQuery}
+                      onChange={(e) => setDrawingSearchQuery(e.target.value)}
+                      style={{ width: '100%', paddingLeft: 30, paddingRight: 10, paddingTop: 6, paddingBottom: 6, borderRadius: 'var(--radius-md)', border: '1px solid var(--border)', background: 'var(--bg-card)', fontSize: 13 }}
+                    />
+                  </div>
+                  <button 
+                    className="btn btn-ghost btn-icon btn-sm" 
+                    onClick={() => setDrawingSortOrder(o => o === 'desc' ? 'asc' : 'desc')}
+                    title={`Sort by Date: ${drawingSortOrder === 'desc' ? 'Newest first' : 'Oldest first'}`}
+                    style={{ border: '1px solid var(--border)', background: 'var(--bg-card)' }}
+                  >
+                    {drawingSortOrder === 'desc' ? <ArrowDown size={14} /> : <ArrowUp size={14} />}
+                  </button>
+                </div>
+
+                {groupedThreads.map(thread => {
+                  const isExpanded = expandedFolders[thread.thread_id]
+                  const latestStatus = thread.versions[0]?.status
+                  const meta = STATUS_META[latestStatus] || STATUS_META.pending
+                  const checked = thread.versions.some(v => selectedDrawingIds.includes(v.id))
+                  const fav = isFavThread(thread.thread_id)
+                  
                   return (
-                    <div
-                      key={d.id}
-                      id={`drawing-item-${d.id}`}
-                      onClick={() => openDrawing(d)}
-                      style={{
-                        padding: '12px 12px',
-                        borderRadius: 'var(--radius-md)',
-                        border: `1px solid ${isActive ? 'var(--primary)' : 'var(--border)'}`,
-                        background: isActive ? 'var(--primary-muted)' : 'var(--bg-card)',
-                        cursor: 'pointer', marginBottom: 6,
-                        transition: 'all 0.15s',
-                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
-                        {selectionMode && (
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => toggleSelect(d.id)}
-                            onClick={(e) => e.stopPropagation()}
-                            style={{ width: 16, height: 16 }}
-                          />
-                        )}
-                        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          <FileText size={12} style={{ marginRight: 4 }} />
-                          {d.filename}
-                          {fav && <Star size={12} style={{ marginLeft: 8 }} color="var(--warning)" fill="var(--warning)" />}
-                          {d.version > 1 && (
-                            <span className="badge" style={{ marginLeft: 8, background: 'var(--bg-hover)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>
-                              v{d.version}
-                            </span>
+                    <div key={thread.thread_id} style={{ marginBottom: 6 }}>
+                      {/* Folder Header */}
+                      <div
+                        onClick={(e) => toggleFolder(e, thread.thread_id)}
+                        style={{
+                          padding: '12px 12px',
+                          borderRadius: 'var(--radius-md)',
+                          border: '1px solid var(--border)',
+                          background: 'var(--bg-card)',
+                          cursor: 'pointer',
+                          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 }}>
+                          {selectionMode && (
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={selectionType === 'folder' && selectedDrawingIds.includes(thread.thread_id)}
+                                onChange={() => toggleFolderSelect(thread.thread_id)}
+                                style={{ width: 16, height: 16, cursor: 'pointer' }}
+                              />
+                            </div>
                           )}
+                           <Folder size={14} color="var(--primary)" />
+                           <div style={{ fontWeight: 600, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                             {thread.thread_name}
+                             {fav && <Star size={12} style={{ marginLeft: 8 }} color="var(--warning)" fill="var(--warning)" />}
+                             <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--text-muted)' }}>({thread.versions.length} version{thread.versions.length !== 1 && 's'})</span>
+                           </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                          <meta.Icon size={10} color={meta.color} />
-                          <span style={{ fontSize: 11, color: meta.color, fontWeight: 700 }}>{meta.label}</span>
-                          <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}>
-                            {new Date((d.updated_at || d.created_at) + 'Z').toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' })}
-                          </span>
-                        </div>
+                        <ChevronRight size={14} color="var(--text-muted)" style={{ transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
                       </div>
-                      <ChevronRight size={14} color="var(--text-muted)" />
+
+                      {/* Versions */}
+                      {isExpanded && (
+                        <div style={{ paddingLeft: 16, marginTop: 4 }}>
+                          {sortVersions(thread.versions).map((v, vIdx) => {
+                            const vMeta = STATUS_META[v.status] || STATUS_META.pending
+                            const isActive = selected?.drawing?.id === v.id
+                            const vChecked = selectedDrawingIds.includes(v.id)
+                            const isLatest = vIdx === 0
+                            const vFav = isFavDrawing(v.id)
+                            return (
+                              <div
+                                key={v.id}
+                                onClick={() => openDrawing(v)}
+                                style={{
+                                  padding: '8px 12px',
+                                  borderRadius: 'var(--radius-md)',
+                                  border: `1px solid ${isActive ? 'var(--primary)' : 'transparent'}`,
+                                  background: isActive ? 'var(--primary-muted)' : 'transparent',
+                                  cursor: 'pointer',
+                                  display: 'flex', alignItems: 'center', gap: 8,
+                                  marginBottom: 2
+                                }}
+                              >
+                                {selectionMode && (
+                                  <div onClick={(e) => e.stopPropagation()}>
+                                    <input
+                                      type="checkbox"
+                                      checked={selectionType === 'file' && vChecked}
+                                      onChange={() => toggleSelect(v.id)}
+                                      style={{ width: 14, height: 14, cursor: 'pointer' }}
+                                    />
+                                  </div>
+                                )}
+                                <FileText size={12} color={isActive ? 'var(--primary)' : 'var(--text-muted)'} />
+                                <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+                                  <div style={{ fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                                    {v.filename}
+                                    <span className="badge" style={{ marginLeft: 4, background: 'var(--bg-hover)', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>v{v.version}</span>
+                                    {isLatest && <span className="badge" style={{ marginLeft: 4, background: 'var(--primary-muted)', border: '1px solid var(--primary)', color: 'var(--primary)', fontSize: 9 }}>Latest</span>}
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                                    <vMeta.Icon size={10} color={vMeta.color} />
+                                    <span style={{ fontSize: 10, color: vMeta.color, fontWeight: 600 }}>{vMeta.label}</span>
+                                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                                      {new Date((v.updated_at || v.created_at) + 'Z').toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'short', timeStyle: 'short' })}
+                                    </span>
+                                  </div>
+                                </div>
+                                {/* Per-drawing favourite button */}
+                                <button
+                                  onClick={(e) => toggleFavDrawing(e, v.id)}
+                                  title={vFav ? 'Remove from favourites' : 'Add to favourites'}
+                                  style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', flexShrink: 0 }}
+                                >
+                                  <Star size={11} color={vFav ? 'var(--warning)' : 'var(--text-muted)'} fill={vFav ? 'var(--warning)' : 'none'} />
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
                   )
                 })}
@@ -550,7 +806,7 @@ export default function EmployeeDashboard() {
                     )
                   })()}
 
-                  {/* Re-upload if sent back */}
+                  {/* Re-upload only if sent_back AND not an older_version */}
                   {selected.drawing.status === 'sent_back' && (
                     <button
                       id="reupload-btn"
@@ -558,6 +814,23 @@ export default function EmployeeDashboard() {
                       onClick={() => { setReupload(true); setViewMode('upload') }}
                     >
                       <Upload size={13} /> Upload Corrected Drawing
+                    </button>
+                  )}
+                  {/* Submit if draft */}
+                  {selected.drawing.status === 'draft' && (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={async () => {
+                        try {
+                          await drawingsAPI.submit(selected.drawing.id);
+                          setSelected(prev => ({...prev, drawing: {...prev.drawing, status: 'pending'}}));
+                          setDrawings(prev => prev.map(d => d.id === selected.drawing.id ? {...d, status: 'pending'} : d));
+                        } catch (e) {
+                          alert("Failed to submit drawing.");
+                        }
+                      }}
+                    >
+                      <CheckCircle size={13} /> Submit to Manager
                     </button>
                   )}
                 </div>
@@ -581,33 +854,35 @@ export default function EmployeeDashboard() {
                   <DrawingViewer
                     imageB64={selected.image_b64}
                     imageB64s={selected.image_b64s}
-                    issues={selected.drawing.status === 'approved' || selected.drawing.status === 'sent_back'
-                      ? selected.issues : []}
+                    issues={selected.issues}
                     bounds={selected.bounds}
+                    selectedId={selectedIssueId}
+                    onSelectIssue={(i) => setSelectedIssueId(i.id)}
+                    onClickPosition={(x, y, pk) => {
+                      setIssuePosition({ x, y, page_index: pk })
+                      setEditingIssue(null)
+                      setShowIssueForm(true)
+                    }}
+                    canAnnotate={true}
                     managerMode={false}
                   />
                 </div>
 
-                {/* Issues — only visible after manager action */}
+                {/* Issues — visible to employee to see doubts and manager comments */}
                 <div style={{ padding: 16, overflowY: 'auto' }}>
                   <div style={{ marginBottom: 12, fontWeight: 700, fontSize: 13 }}>
-                    🔍 Detected Issues
-                    {selected.drawing.status === 'pending' && (
-                      <div className="alert alert-info" style={{ marginTop: 8, fontSize: 12 }}>
-                        Issues will be visible after manager review
-                      </div>
-                    )}
+                    🔍 Detected Issues & Comments
                   </div>
-                  {(selected.drawing.status === 'approved' || selected.drawing.status === 'sent_back') ? (
-                    <IssuePanel
-                      issues={selected.issues}
-                      managerMode={false}
-                    />
-                  ) : (
-                    <div style={{ color: 'var(--text-muted)', fontSize: 13, marginTop: 20 }}>
-                      Drawing is pending manager review.
-                    </div>
-                  )}
+                  <IssuePanel
+                    issues={selected.issues}
+                    selectedId={selectedIssueId}
+                    managerMode={false}
+                    canEdit={true}
+                    onSelect={(i) => setSelectedIssueId(i.id)}
+                    onEdit={(i) => { setEditingIssue(i); setShowIssueForm(true); }}
+                    onIssueUpdated={handleIssueUpdated}
+                    onIssueDeleted={handleIssueDeleted}
+                  />
 
                   {/* Thread "chat" (manager comments across versions) */}
                   <div className="divider" style={{ margin: '16px 0' }} />
@@ -664,6 +939,21 @@ export default function EmployeeDashboard() {
           )}
         </div>
       </div>
+
+      {/* Render Issue Form for Employee */}
+      {showIssueForm && (
+        <IssueForm
+          mode={editingIssue ? 'edit' : 'add'}
+          drawingId={selected?.drawing?.id}
+          initial={editingIssue || {}}
+          position={issuePosition || {}}
+          onSave={handleIssueSaved}
+          onClose={() => {
+            setShowIssueForm(false)
+            setEditingIssue(null)
+          }}
+        />
+      )}
     </div>
   )
 }
